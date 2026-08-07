@@ -1,0 +1,48 @@
+# ── Segredos / credenciais ──
+cookies/*
+!cookies/.gitkeep
+*.env
+.env.*
+
+# ── Estado local / runtime (específico da máquina, não é código) ──
+config.json
+baseline_acumulado.json
+_logs/
+
+# ── Pastas de vídeo de origem/destino (dados do usuário, nunca código) ──
+# Este projeto roda dentro da mesma pasta onde o usuário larga vídeos pra
+# processar — qualquer pasta nova de vídeos tem que ficar de fora do git.
+Revisão de Videos/
+canalcurioso-vq5rq/
+capivara_boy/
+saikinanime/
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.wmv
+*.flv
+*.webm
+*.m4v
+*.3gp
+*.ts
+*.mts
+*.m2ts
+*.vob
+*.ogv
+*.mpg
+*.mpeg
+
+# ── Build / cache Python ──
+__pycache__/
+*.pyc
+build/
+dist/
+
+# ── Artefatos de release (gerados pelo publish.py, não versionados) ──
+payload_v*.zip
+launcher_setup.zip
+launcher.exe
+
+# ── Config de ferramentas locais ──
+.claude/

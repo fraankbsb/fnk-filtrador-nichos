@@ -1,0 +1,4 @@
+opencv-python
+torch
+open_clip_torch
+Pillow
