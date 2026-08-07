@@ -43,6 +43,7 @@ dist/
 payload_v*.zip
 launcher_setup.zip
 launcher.exe
+launcher.spec
 
 # ── Config de ferramentas locais ──
 .claude/
