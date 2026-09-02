@@ -30,6 +30,7 @@ PASTA = Path(__file__).resolve().parent
 PAYLOAD_FILES = [
     "FNK_Separador.py",
     "FNK_DetectorPets.py",
+    "FNK_Template.py",
     "FNK_Separador-2.spec",
     "FNK_Separador.spec",
     "COMPILAR_EXE.bat",

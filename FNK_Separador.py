@@ -7,16 +7,25 @@ Coloque este .exe dentro de:
   D:\\fnkSocialMidia\\fnkFiltradorNichos\\
 
 Ao abrir, o programa lista as subpastas dessa pasta e deixa você escolher
-quais processar (uma, várias ou todas). Os vídeos de cada pasta escolhida
-são analisados pelo CONTEÚDO VISUAL (não pelo nome do arquivo) e copiados
-para D:\\fnkSocialMidia\\fnkPerfis\\<Nicho>\\
-Um vídeo pode se encaixar em até 2 nichos — nesse caso é copiado para os 2.
+quais processar (uma, várias ou todas). Depois pergunta COMO separar:
+
+  1) NICHO    — pelo CONTEÚDO VISUAL do vídeo (não pelo nome do arquivo),
+                usando IA. Vai para fnkPerfis\\<Nicho>\\ (Pets, Comedia).
+                Um vídeo pode se encaixar em 2 nichos e ir para os 2.
+
+  2) TEMPLATE — pela MOLDURA do vídeo: a cor das faixas de fundo (preto,
+                branco, cinza, colorido) e se ele é 9:16 preenchendo a
+                tela toda sozinho. Vai para fnkPerfis\\Templates\\<Cor>\\
+                Não usa IA — é bem mais rápido (ver FNK_Template.py).
+
+  3) AMBOS    — as duas separações; o vídeo ganha uma cópia em cada pasta.
+
 O original só é apagado da pasta de origem depois que todas as cópias
 necessárias forem concluídas com sucesso.
 
-Vídeos sem identificação confiável em nenhum nicho específico vão para
-"Gerais". Vídeos que não puderem ser analisados (ex: arquivo corrompido)
-vão para a pasta de revisão.
+Vídeos que não puderem ser analisados (ex: arquivo corrompido) vão para a
+pasta de revisão. No modo AMBOS, se só uma das duas análises falhar, o
+vídeo ainda é separado pela que funcionou.
 
 Configuração em config.json (criado automaticamente na 1ª execução, ao
 lado do .exe/script).
@@ -38,6 +47,7 @@ try:
     import torch
     import open_clip
     from PIL import Image
+    import FNK_Template as tpl
 except ImportError as e:
     _root = tk.Tk()
     _root.withdraw()
@@ -66,6 +76,10 @@ CONFIG_PADRAO = {
     "fator_calibracao":    0.5,
     "usar_duas_categorias": True,
     "recorte_topo":        0.30,
+    # Ajustes da separação por TEMPLATE (cor do fundo e 9:16). Ficam no
+    # mesmo config.json, com prefixo "template_", e quem lê/valida é o
+    # próprio módulo FNK_Template.
+    **tpl.CONFIG_TEMPLATE_PADRAO,
 }
 
 # Preenchidos por aplicar_config() a partir do config.json na inicialização.
@@ -117,6 +131,7 @@ def aplicar_config(cfg):
     FATOR_CALIBRACAO     = float(cfg["fator_calibracao"])
     USAR_DUAS_CATEGORIAS = bool(cfg["usar_duas_categorias"])
     RECORTE_TOPO         = float(cfg["recorte_topo"])
+    tpl.aplicar_config(cfg)
 
 
 # ══════════════════════════════════════════════
@@ -392,6 +407,41 @@ def listar_pastas_origem(pasta_base):
     )
 
 
+# ══════════════════════════════════════════════
+#  MODOS DE SEPARAÇÃO
+# ══════════════════════════════════════════════
+# NICHO    → analisa o CONTEÚDO com IA (Pets / Comedia). Lento.
+# TEMPLATE → analisa a MOLDURA do vídeo (cor do fundo, 9:16). Rápido.
+# AMBOS    → faz as duas coisas; o vídeo ganha uma cópia em cada pasta.
+
+MODO_NICHO    = "nicho"
+MODO_TEMPLATE = "template"
+MODO_AMBOS    = "ambos"
+
+ROTULO_MODO = {
+    MODO_NICHO:    "Somente NICHO",
+    MODO_TEMPLATE: "Somente TEMPLATE",
+    MODO_AMBOS:    "NICHO + TEMPLATE",
+}
+
+
+def usa_nicho(modo):
+    return modo in (MODO_NICHO, MODO_AMBOS)
+
+
+def usa_template(modo):
+    return modo in (MODO_TEMPLATE, MODO_AMBOS)
+
+
+def pasta_destino_nicho(nicho):
+    return os.path.join(PASTA_PERFIS, nicho)
+
+
+def pasta_destino_template(nome):
+    """<fnkPerfis>\\Templates\\<Preto|Branco|Cinza|Colorido|...>"""
+    return os.path.join(PASTA_PERFIS, tpl.NOME_PASTA_TEMPLATES, nome)
+
+
 def destino_unico(arquivo, pasta_destino):
     dest = Path(pasta_destino) / arquivo.name
     if dest.exists():
@@ -425,14 +475,14 @@ class App(tk.Tk):
         self._vars_pastas = {}   # {Path: tk.IntVar}
 
         self.title("FNK Separador de Vídeos")
-        self.geometry("660x560")
+        self.geometry("660x640")
         self.configure(bg=COR_BG)
         self.resizable(False, False)
 
         # Centralizar na tela
         self.update_idletasks()
         x = (self.winfo_screenwidth()  - 660) // 2
-        y = (self.winfo_screenheight() - 560) // 2
+        y = (self.winfo_screenheight() - 640) // 2
         self.geometry(f"+{x}+{y}")
 
         self._build_selector()
@@ -548,12 +598,96 @@ class App(tk.Tk):
         if not selecionadas:
             messagebox.showinfo("FNK Separador", "Selecione ao menos uma pasta.")
             return
-        self._build_execucao(selecionadas)
-        threading.Thread(target=self._executar_lote, args=(selecionadas,), daemon=True).start()
+        self._build_modo(selecionadas)
 
-    # ─── Tela 2: execução ─────────────────────
+    # ─── Tela 2: escolha do modo ──────────────
 
-    def _build_execucao(self, pastas):
+    def _build_modo(self, pastas):
+        """Pergunta o que fazer com as pastas escolhidas: separar por
+        nicho (conteúdo), por template (moldura) ou pelos dois."""
+        self._limpar_janela()
+
+        hdr = tk.Frame(self, bg="#0d0d0d", pady=16)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="🎬  FNK Separador de Vídeos",
+                 bg="#0d0d0d", fg=COR_VERDE_T,
+                 font=("Segoe UI", 15, "bold")).pack()
+        n_videos = sum(len(listar_videos(p)) for p in pastas)
+        nomes = ", ".join(p.name for p in pastas)
+        tk.Label(hdr, text=f"{len(pastas)} pasta(s), {n_videos} vídeo(s): {nomes}",
+                 bg="#0d0d0d", fg=COR_CINZA,
+                 font=("Segoe UI", 9), wraplength=620).pack()
+
+        card = tk.Frame(self, bg=COR_CARD, bd=0, padx=22, pady=18)
+        card.pack(fill="both", expand=True, padx=18, pady=14)
+
+        tk.Label(card, text="Como você quer separar esses vídeos?",
+                 bg=COR_CARD, fg=COR_BRANCO,
+                 font=("Segoe UI", 12, "bold"), anchor="w").pack(fill="x")
+        tk.Label(card, text="Escolha uma das três opções abaixo:",
+                 bg=COR_CARD, fg=COR_CINZA,
+                 font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(0, 14))
+
+        opcoes = [
+            (MODO_NICHO, "🎯  Somente NICHO",
+             "Analisa o que aparece no vídeo (Pets / Comedia) usando IA.\n"
+             "Vai para: fnkPerfis\\Pets  e  fnkPerfis\\Comedia\n"
+             "Mais demorado — precisa carregar o modelo de IA."),
+            (MODO_TEMPLATE, "🎨  Somente TEMPLATE",
+             "Analisa a moldura/fundo do vídeo (preto, branco, cinza, colorido)\n"
+             "e separa os que são 9:16 preenchendo a tela toda.\n"
+             "Vai para: fnkPerfis\\Templates\\...  —  bem mais rápido, sem IA."),
+            (MODO_AMBOS, "⚡  NICHO + TEMPLATE",
+             "Faz as duas separações de uma vez. Cada vídeo ganha uma cópia\n"
+             "na pasta do nicho E outra na pasta da cor do template.\n"
+             "É o mais demorado: soma o tempo das duas análises."),
+        ]
+
+        for modo, titulo, desc in opcoes:
+            bloco = tk.Frame(card, bg="#252525", padx=16, pady=12,
+                             highlightthickness=1, highlightbackground=COR_BORDA,
+                             cursor="hand2")
+            bloco.pack(fill="x", pady=5)
+
+            lbl_t = tk.Label(bloco, text=titulo, bg="#252525", fg=COR_VERDE_T,
+                             font=("Segoe UI", 12, "bold"), anchor="w")
+            lbl_t.pack(fill="x")
+            lbl_d = tk.Label(bloco, text=desc, bg="#252525", fg=COR_CINZA,
+                             font=("Segoe UI", 9), anchor="w", justify="left")
+            lbl_d.pack(fill="x")
+
+            def escolher(_evento=None, m=modo):
+                self._iniciar(pastas, m)
+
+            # O clique vale no bloco inteiro, não só no texto do título.
+            for w in (bloco, lbl_t, lbl_d):
+                w.bind("<Button-1>", escolher)
+
+            def realce(cor, alvo=bloco, textos=(lbl_t, lbl_d)):
+                alvo.configure(bg=cor)
+                for w in textos:
+                    w.configure(bg=cor)
+
+            for w in (bloco, lbl_t, lbl_d):
+                w.bind("<Enter>", lambda e, f=realce: f("#2f3b36"))
+                w.bind("<Leave>", lambda e, f=realce: f("#252525"))
+
+        rod = tk.Frame(self, bg=COR_BG, pady=12, padx=18)
+        rod.pack(fill="x", side="bottom")
+        tk.Button(
+            rod, text="←  Voltar", command=self._build_selector,
+            font=("Segoe UI", 9), bg="#2c2c2a", fg=COR_BRANCO, relief="flat",
+            padx=12, pady=6, cursor="hand2",
+        ).pack(side="left")
+
+    def _iniciar(self, pastas, modo):
+        self._build_execucao(pastas, modo)
+        threading.Thread(target=self._executar_lote, args=(pastas, modo),
+                         daemon=True).start()
+
+    # ─── Tela 3: execução ─────────────────────
+
+    def _build_execucao(self, pastas, modo):
         self._limpar_janela()
 
         hdr = tk.Frame(self, bg="#0d0d0d", pady=16)
@@ -565,6 +699,9 @@ class App(tk.Tk):
         tk.Label(hdr, text=f"Processando: {nomes}",
                  bg="#0d0d0d", fg=COR_CINZA,
                  font=("Segoe UI", 9), wraplength=620).pack()
+        tk.Label(hdr, text=f"Modo: {ROTULO_MODO[modo]}",
+                 bg="#0d0d0d", fg=COR_AMARELO,
+                 font=("Segoe UI", 9, "bold")).pack()
 
         card = tk.Frame(self, bg=COR_CARD, bd=0, padx=22, pady=18)
         card.pack(fill="both", expand=True, padx=18, pady=14)
@@ -632,25 +769,37 @@ class App(tk.Tk):
                                  font=("Segoe UI", 9), anchor="w")
         self._status.pack(side="left", padx=16)
 
-        nichos_possiveis = list(NICHO_PROMPTS.keys())
-        ausentes = [
-            cat for cat in nichos_possiveis
-            if not os.path.isdir(os.path.join(PASTA_PERFIS, cat))
-        ]
+        esperadas = []
+        if usa_nicho(modo):
+            esperadas += [pasta_destino_nicho(c) for c in NICHO_PROMPTS]
+        if usa_template(modo):
+            esperadas += [pasta_destino_template(c) for c in tpl.TODOS_TEMPLATES]
+        ausentes = [p for p in esperadas if not os.path.isdir(p)]
         if ausentes:
             self._log_add(
                 f"⚠  {len(ausentes)} pasta(s) de destino não encontrada(s) — "
                 "serão criadas automaticamente.", "rev"
             )
+        self._log_add(f"  Modo: {ROTULO_MODO[modo]}", "info")
         self._log_add(f"  Destino: {PASTA_PERFIS}", "info")
         self._log_add(f"  Revisão: {PASTA_REVISAO}", "info")
-        self._log_add(
-            f"  Config: {FRAMES_POR_VIDEO} frames/vídeo | "
-            f"confiança mín. {CONFIANCA_MINIMA} | "
-            f"fator calibração {FATOR_CALIBRACAO} | "
-            f"2 categorias: {'sim' if USAR_DUAS_CATEGORIAS else 'não'}\n",
-            "info"
-        )
+        if usa_nicho(modo):
+            self._log_add(
+                f"  Nicho: {FRAMES_POR_VIDEO} frames/vídeo | "
+                f"confiança mín. {CONFIANCA_MINIMA} | "
+                f"fator calibração {FATOR_CALIBRACAO} | "
+                f"2 categorias: {'sim' if USAR_DUAS_CATEGORIAS else 'não'}",
+                "info"
+            )
+        if usa_template(modo):
+            self._log_add(
+                f"  Template: pastas em {tpl.NOME_PASTA_TEMPLATES}\\ | "
+                f"{tpl.valor_config('template_frames')} frames/vídeo | "
+                f"9:16 com folga de "
+                f"{tpl.valor_config('template_tolerancia_916')*100:.0f}%",
+                "info"
+            )
+        self._log_add("", "info")
 
     def _stat(self, parent, titulo, valor):
         f = tk.Frame(parent, bg="#252525", padx=14, pady=10,
@@ -676,7 +825,7 @@ class App(tk.Tk):
 
     # ─── Processamento em lote ────────────────
 
-    def _executar_lote(self, pastas):
+    def _executar_lote(self, pastas, modo):
         videos_por_pasta = {p: listar_videos(p) for p in pastas}
         total = sum(len(v) for v in videos_por_pasta.values())
         self.after(0, lambda: self._total_l.configure(text=str(total)))
@@ -694,15 +843,22 @@ class App(tk.Tk):
         log_linhas = []
         csv_linhas = []
 
-        self._atualizar_status("Carregando modelo de IA (pode demorar na 1ª vez)...", COR_AMARELO)
-        self._log_add("  Carregando modelo de análise de vídeo...", "info")
-        try:
-            carregar_modelo()
-        except Exception as e:
-            self._log_add(f"  ✗ Falha ao carregar o modelo de IA: {e}", "err")
-            self._atualizar_status("Erro ao preparar modelo de IA.", COR_ERRO)
-            self._finalizar()
-            return
+        # O modelo de IA só é necessário para a separação por nicho. No
+        # modo Somente TEMPLATE ele nem é carregado — é o que faz esse
+        # modo começar na hora, em vez de esperar o CLIP subir.
+        if usa_nicho(modo):
+            self._atualizar_status("Carregando modelo de IA (pode demorar na 1ª vez)...", COR_AMARELO)
+            self._log_add("  Carregando modelo de análise de vídeo...", "info")
+            try:
+                carregar_modelo()
+            except Exception as e:
+                self._log_add(f"  ✗ Falha ao carregar o modelo de IA: {e}", "err")
+                self._atualizar_status("Erro ao preparar modelo de IA.", COR_ERRO)
+                self._finalizar()
+                return
+        else:
+            self._log_add("  Modo template: análise direta dos pixels, "
+                          "sem modelo de IA (bem mais rápido).", "info")
 
         self._log_add("─" * 54, "head")
         self._log_add(f"  Início: {datetime.now():%d/%m/%Y %H:%M:%S}", "head")
@@ -714,17 +870,18 @@ class App(tk.Tk):
                 continue
 
             self._log_add(f"\n▶ Pasta: {pasta.name} ({len(videos)} vídeo(s))", "head")
-            self._atualizar_status(f"Calibrando modelo para '{pasta.name}'...", COR_AMARELO)
-            try:
-                calibrar_baseline(pasta, self.pasta_base)
-                total_acumulado = _carregar_baseline_acumulado(self.pasta_base)["n"]
-                self._log_add(
-                    f"  Calibração acumulada: {total_acumulado} vídeo(s) analisados "
-                    "no total (desde sempre, guardado na raiz).", "info"
-                )
-            except Exception as e:
-                self._log_add(f"  ✗ Falha ao calibrar '{pasta.name}': {e}", "err")
-                continue
+            if usa_nicho(modo):
+                self._atualizar_status(f"Calibrando modelo para '{pasta.name}'...", COR_AMARELO)
+                try:
+                    calibrar_baseline(pasta, self.pasta_base)
+                    total_acumulado = _carregar_baseline_acumulado(self.pasta_base)["n"]
+                    self._log_add(
+                        f"  Calibração acumulada: {total_acumulado} vídeo(s) analisados "
+                        "no total (desde sempre, guardado na raiz).", "info"
+                    )
+                except Exception as e:
+                    self._log_add(f"  ✗ Falha ao calibrar '{pasta.name}': {e}", "err")
+                    continue
 
             for video in videos:
                 processados += 1
@@ -735,43 +892,74 @@ class App(tk.Tk):
                            self._status.configure(text=txt))
 
                 agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                cat_score = []
-                motivo_falha = None
-                try:
-                    cat_score = classificar_video(str(video))
-                except Exception as e:
-                    motivo_falha = str(e)
-                    self._log_add(f"  ⚠ Não foi possível analisar {video.name[:34]} — {e}", "rev")
 
-                cats = [c for c, _ in cat_score]
+                # ─── Análise: nicho (IA) e/ou template (pixels) ───
+                # Cada análise falha por conta própria. No modo AMBOS, se
+                # uma falhar mas a outra funcionar, o vídeo ainda é
+                # separado pelo que deu certo — só vai pra revisão quando
+                # não sobrar nenhum destino.
+                cat_score = []
+                info_tpl = None
+                falhas = []
+
+                if usa_nicho(modo):
+                    try:
+                        cat_score = classificar_video(str(video))
+                    except Exception as e:
+                        falhas.append(f"nicho: {e}")
+
+                if usa_template(modo):
+                    try:
+                        info_tpl = tpl.analisar_template(str(video))
+                    except Exception as e:
+                        falhas.append(f"template: {e}")
+
+                # ─── Monta a lista de destinos ───
+                alvos = []   # [(rótulo_p/_log, pasta_de_destino)]
+                for cat, _score in cat_score:
+                    alvos.append((cat, pasta_destino_nicho(cat)))
+                if info_tpl is not None:
+                    alvos.append((info_tpl["pasta"],
+                                  pasta_destino_template(info_tpl["pasta"])))
+
                 cat1, score1 = (cat_score[0] if len(cat_score) > 0 else ("", ""))
                 cat2, score2 = (cat_score[1] if len(cat_score) > 1 else ("", ""))
-                dest1_str = dest2_str = ""
+                nome_tpl = info_tpl["pasta"] if info_tpl else ""
+                resumo_tpl = info_tpl["resumo"] if info_tpl else ""
+
+                if falhas and alvos:
+                    self._log_add(f"  ⚠ Análise parcial de {video.name[:30]} — "
+                                  f"{'; '.join(falhas)}", "rev")
+                elif falhas:
+                    self._log_add(f"  ⚠ Não foi possível analisar {video.name[:30]} — "
+                                  f"{'; '.join(falhas)}", "rev")
 
                 try:
-                    if cats:
+                    if alvos:
+                        # Copia para todos os destinos ANTES de apagar o
+                        # original — se qualquer cópia falhar, o arquivo
+                        # de origem continua onde está.
                         destinos = []
-                        for cat in cats:
-                            pasta_dest = os.path.join(PASTA_PERFIS, cat)
+                        for rotulo, pasta_dest in alvos:
                             os.makedirs(pasta_dest, exist_ok=True)
                             dest = destino_unico(video, pasta_dest)
                             shutil.copy2(str(video), str(dest))
-                            destinos.append((cat, dest))
+                            destinos.append((rotulo, dest))
 
                         os.remove(str(video))
 
                         movidos += 1
-                        cats_str = " + ".join(cats)
-                        self._log_add(f"  ✓ [{cats_str:<18}] {video.name[:46]}", "ok")
-                        for cat, dest in destinos:
-                            log_linhas.append(f"OK|{pasta.name}|{cat}|{video.name}|{dest}")
-                        dest1_str = str(destinos[0][1]) if len(destinos) > 0 else ""
-                        dest2_str = str(destinos[1][1]) if len(destinos) > 1 else ""
+                        rotulos = " + ".join(r for r, _ in destinos)
+                        self._log_add(f"  ✓ [{rotulos:<22}] {video.name[:42]}", "ok")
+                        for rotulo, dest in destinos:
+                            log_linhas.append(f"OK|{pasta.name}|{rotulo}|{video.name}|{dest}")
                         csv_linhas.append([
-                            pasta.name, video.name,
+                            pasta.name, video.name, modo,
                             cat1, f"{score1:.4f}" if score1 != "" else "",
                             cat2, f"{score2:.4f}" if score2 != "" else "",
-                            dest1_str, dest2_str, "OK", "", agora,
+                            nome_tpl, resumo_tpl,
+                            " | ".join(str(d) for _, d in destinos),
+                            "OK", "; ".join(falhas), agora,
                         ])
                     else:
                         os.makedirs(PASTA_REVISAO, exist_ok=True)
@@ -779,12 +967,12 @@ class App(tk.Tk):
                         shutil.move(str(video), str(dest))
 
                         revisao += 1
-                        motivo = motivo_falha or "confiança insuficiente"
-                        self._log_add(f"  ⚠ [REVISÃO            ] {video.name[:46]}", "rev")
+                        motivo = "; ".join(falhas) or "confiança insuficiente"
+                        self._log_add(f"  ⚠ [REVISÃO               ] {video.name[:42]}", "rev")
                         log_linhas.append(f"REVISAO|{pasta.name}||{video.name}|{dest}")
                         csv_linhas.append([
-                            pasta.name, video.name, "", "", "", "",
-                            "", str(dest), "REVISAO", motivo, agora,
+                            pasta.name, video.name, modo, "", "", "", "",
+                            "", "", str(dest), "REVISAO", motivo, agora,
                         ])
 
                 except Exception as e:
@@ -792,8 +980,8 @@ class App(tk.Tk):
                     self._log_add(f"  ✗ ERRO: {video.name[:40]} — {e}", "err")
                     log_linhas.append(f"ERRO|{pasta.name}||{video.name}|{e}")
                     csv_linhas.append([
-                        pasta.name, video.name, cat1, "", cat2, "",
-                        "", "", "ERRO", str(e), agora,
+                        pasta.name, video.name, modo, cat1, "", cat2, "",
+                        nome_tpl, resumo_tpl, "", "ERRO", str(e), agora,
                     ])
 
                 self.after(0, lambda m=movidos: self._movidos_l.configure(text=str(m)))
@@ -806,11 +994,22 @@ class App(tk.Tk):
         self._log_add(f"\n{'═'*54}", "head")
         self._log_add("  SEPARAÇÃO CONCLUÍDA!", "head")
         self._log_add(f"  Total processado : {total}", "head")
-        self._log_add(f"  Movidos p/ nicho : {movidos}", "ok")
+        self._log_add(f"  Vídeos separados : {movidos}", "ok")
         self._log_add(f"  Para revisão     : {revisao}", "rev")
         if erros:
             self._log_add(f"  Erros            : {erros}", "err")
         self._log_add(f"  Tempo total      : {tempo:.1f}s", "head")
+
+        # Quantos arquivos caíram em cada pasta de destino.
+        por_pasta = {}
+        for l in log_linhas:
+            if l.startswith("OK|"):
+                rotulo = l.split("|")[2]
+                por_pasta[rotulo] = por_pasta.get(rotulo, 0) + 1
+        if por_pasta:
+            self._log_add("  ─ Cópias por pasta ─", "head")
+            for rotulo, qtd in sorted(por_pasta.items(), key=lambda x: -x[1]):
+                self._log_add(f"    {rotulo:<16} {qtd}", "ok")
         self._log_add(f"{'═'*54}", "head")
 
         self.after(0, lambda: self._atualizar_status(
@@ -838,8 +1037,10 @@ class App(tk.Tk):
             with open(os.path.join(pasta_log, nome_csv), "w", encoding="utf-8", newline="") as f:
                 w = csv.writer(f)
                 w.writerow([
-                    "pasta", "arquivo", "categoria_1", "score_1", "categoria_2", "score_2",
-                    "destino_1", "destino_2", "status", "motivo", "data_hora",
+                    "pasta", "arquivo", "modo",
+                    "categoria_1", "score_1", "categoria_2", "score_2",
+                    "template", "detalhe_template",
+                    "destinos", "status", "motivo", "data_hora",
                 ])
                 w.writerows(csv_linhas)
 

@@ -8,7 +8,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = ["cv2", "PIL", "PIL.Image"]
+hiddenimports = ["cv2", "PIL", "PIL.Image", "numpy", "FNK_Template"]
 
 for pacote in ("torch", "open_clip"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pacote)
