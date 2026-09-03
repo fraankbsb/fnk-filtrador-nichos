@@ -433,13 +433,21 @@ def usa_template(modo):
     return modo in (MODO_TEMPLATE, MODO_AMBOS)
 
 
+# Tudo que este programa separa cai dentro dessa pasta, pra não se
+# misturar com as outras pastas de fnkPerfis (perfis, planilhas etc.) e
+# ficar fácil de achar visualmente.
+NOME_PASTA_PROCESSADOS = "VIDEOS PROCESSADOS"
+NOME_PASTA_NICHOS      = "Nichos"
+
+
 def pasta_destino_nicho(nicho):
-    return os.path.join(PASTA_PERFIS, nicho)
+    """<fnkPerfis>\\VIDEOS PROCESSADOS\\Nichos\\<Pets|Comedia>"""
+    return os.path.join(PASTA_PERFIS, NOME_PASTA_PROCESSADOS, NOME_PASTA_NICHOS, nicho)
 
 
 def pasta_destino_template(nome):
-    """<fnkPerfis>\\Templates\\<Preto|Branco|Cinza|Colorido|...>"""
-    return os.path.join(PASTA_PERFIS, tpl.NOME_PASTA_TEMPLATES, nome)
+    """<fnkPerfis>\\VIDEOS PROCESSADOS\\Template\\<Preto|Branco|Cinza|Colorido|...>"""
+    return os.path.join(PASTA_PERFIS, NOME_PASTA_PROCESSADOS, tpl.NOME_PASTA_TEMPLATES, nome)
 
 
 def destino_unico(arquivo, pasta_destino):
@@ -781,7 +789,10 @@ class App(tk.Tk):
                 "serão criadas automaticamente.", "rev"
             )
         self._log_add(f"  Modo: {ROTULO_MODO[modo]}", "info")
-        self._log_add(f"  Destino: {PASTA_PERFIS}", "info")
+        self._log_add(
+            f"  Destino: {os.path.join(PASTA_PERFIS, NOME_PASTA_PROCESSADOS)}",
+            "info"
+        )
         self._log_add(f"  Revisão: {PASTA_REVISAO}", "info")
         if usa_nicho(modo):
             self._log_add(
@@ -793,7 +804,7 @@ class App(tk.Tk):
             )
         if usa_template(modo):
             self._log_add(
-                f"  Template: pastas em {tpl.NOME_PASTA_TEMPLATES}\\ | "
+                f"  Template: pastas em {NOME_PASTA_PROCESSADOS}\\{tpl.NOME_PASTA_TEMPLATES}\\ | "
                 f"{tpl.valor_config('template_frames')} frames/vídeo | "
                 f"9:16 com folga de "
                 f"{tpl.valor_config('template_tolerancia_916')*100:.0f}%",

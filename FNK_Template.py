@@ -57,8 +57,9 @@ CONFIG_TEMPLATE_PADRAO = {
     "template_branco_min": 200,
 }
 
-# Nomes das pastas de destino. Ficam dentro de <fnkPerfis>\Templates\
-NOME_PASTA_TEMPLATES = "Templates"
+# Nomes das pastas de destino. Ficam dentro de
+# <fnkPerfis>\VIDEOS PROCESSADOS\Template\
+NOME_PASTA_TEMPLATES = "Template"
 TEMPLATE_PRETO       = "Preto"
 TEMPLATE_BRANCO      = "Branco"
 TEMPLATE_CINZA       = "Cinza"
