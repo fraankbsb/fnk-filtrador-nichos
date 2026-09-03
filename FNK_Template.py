@@ -44,9 +44,14 @@ CONFIG_TEMPLATE_PADRAO = {
     # evita que 1 ou 2 linhas de pixel escuras da compressão de vídeo
     # sejam confundidas com um template de verdade.
     "template_margem_minima": 0.02,
-    # O quanto uma linha de pixels pode variar e ainda ser considerada
-    # parte de uma faixa lisa de fundo (0 = perfeitamente uniforme).
-    "template_std_barra": 14.0,
+    # Fração mínima dos pixels de uma linha que precisa bater com a cor
+    # predominante dela pra essa linha contar como parte da moldura.
+    # Alto de propósito (85%): usa a MEDIANA da própria linha (tolera uma
+    # legenda ocupando uma fatia dela sem quebrar a detecção), mas exige
+    # que seja a GRANDE maioria — um valor baixo aqui (testado com vídeo
+    # real) também classificava roupa escura ou fundo desfocado comum de
+    # vídeo como se fosse moldura, o que é errado.
+    "template_fracao_minima_faixa": 0.85,
     # O quanto a cor de uma linha pode se afastar da cor do começo da
     # faixa sem quebrar a faixa (cobre fundos com leve degradê).
     "template_tolerancia_cor": 20.0,
@@ -206,32 +211,51 @@ def extrair_frames_bgr(caminho_video, n=None, parar_quando=None):
 #  DETECÇÃO DAS FAIXAS DE FUNDO (a "moldura")
 # ══════════════════════════════════════════════
 
-def _contar_faixa(bloco, std_max, tol_cor):
+def _contar_faixa(bloco, frac_min, tol_cor):
     """Recebe as linhas (ou colunas) já na ordem de varredura, de fora pra
     dentro — array (N, comprimento, 3) — e conta quantas delas seguidas
     fazem parte de uma faixa lisa de fundo.
 
-    Uma linha entra na faixa se: (1) ela é praticamente de uma cor só
-    (desvio padrão baixo) e (2) essa cor é parecida com a da primeira
-    linha da faixa (tolera degradê leve, quebra em mudança de cor real).
+    Uma linha entra na faixa se: (1) a GRANDE MAIORIA dos pixels dela bate
+    com a cor predominante DELA MESMA — usa a mediana da própria linha,
+    não a média, porque a mediana ignora uma legenda ocupando uma fatia
+    da linha sem estragar a conta (a média seria puxada pra um tom
+    intermediário) — e (2) essa cor predominante é parecida com a da
+    primeira linha da faixa (tolera degradê leve, quebra em mudança de
+    cor real, tipo quando a faixa acaba e começa o vídeo de verdade).
+
+    Antes isso era feito com desvio padrão da linha inteira, mas uma
+    legenda de 1-2 linhas de texto em cima da faixa fazia o desvio
+    disparar e a moldura não era detectada (achava que a linha já não
+    era mais fundo). Trocar pra "maioria dos pixels bate com a mediana"
+    resolve isso mantendo a exigência alta (85% por padrão) — baixo
+    demais e vira falso positivo com roupa escura ou fundo desfocado
+    comum de vídeo.
 
     Feito de uma vez com numpy (e não num for linha a linha) porque a
     conta roda em milhares de linhas por frame — em Python puro isso
     sozinho custava alguns segundos por vídeo.
+
+    Devolve (quantidade_de_linhas, medianas_dessas_linhas) — o segundo
+    valor é usado depois pra estimar a cor da moldura sem contaminação de
+    texto (ver _margens_frame): junta as medianas de CADA linha aceita
+    (já limpas do texto daquela linha) em vez de misturar todos os
+    pixels crus de uma vez, que reintroduziria o mesmo problema do texto
+    puxando a cor pra um tom errado.
     """
     if bloco.shape[0] == 0:
-        return 0
-    desvio = bloco.std(axis=1).max(axis=1)          # (N,)
-    media = bloco.mean(axis=1)                       # (N, 3)
-    lisa = desvio <= std_max
+        return 0, None
+    mediana = np.median(bloco, axis=1)                          # (N, 3)
+    dist_da_mediana = np.abs(bloco - mediana[:, None, :]).max(axis=2)  # (N, comprimento)
+    frac_perto = (dist_da_mediana <= tol_cor).mean(axis=1)              # (N,)
+    lisa = frac_perto >= frac_min
     if not bool(lisa[0]):
-        return 0
-    perto = np.abs(media - media[0]).max(axis=1) <= tol_cor
+        return 0, None
+    perto = np.abs(mediana - mediana[0]).max(axis=1) <= tol_cor
     ok = lisa & perto
     ok[0] = True                                     # a 1ª define a referência
-    if bool(ok.all()):
-        return int(bloco.shape[0])
-    return int(np.argmax(~ok))
+    n = int(bloco.shape[0]) if bool(ok.all()) else int(np.argmax(~ok))
+    return n, (mediana[:n] if n > 0 else None)
 
 
 def _margens_frame(frame):
@@ -241,7 +265,7 @@ def _margens_frame(frame):
     ou None se o frame inteiro for liso (ex: transição em fade, tela preta)
     — frame assim não diz nada sobre a moldura e é descartado.
     """
-    std_max = float(_CFG["template_std_barra"])
+    frac_min = float(_CFG["template_fracao_minima_faixa"])
     tol_cor = float(_CFG["template_tolerancia_cor"])
 
     f = frame.astype(np.float32)
@@ -249,8 +273,8 @@ def _margens_frame(frame):
     limite_v = h // 2
     limite_h = w // 2
 
-    topo = _contar_faixa(f[:limite_v], std_max, tol_cor)
-    base = _contar_faixa(f[h - limite_v:][::-1], std_max, tol_cor)
+    topo, med_topo = _contar_faixa(f[:limite_v], frac_min, tol_cor)
+    base, med_base = _contar_faixa(f[h - limite_v:][::-1], frac_min, tol_cor)
     if topo >= limite_v and base >= limite_v:
         return None  # frame liso inteiro
 
@@ -259,27 +283,19 @@ def _margens_frame(frame):
         return None
     # transpose(1,0,2): vira "lista de colunas" pra usar a mesma contagem.
     colunas = meio.transpose(1, 0, 2)
-    esq = _contar_faixa(colunas[:limite_h], std_max, tol_cor)
-    dir_ = _contar_faixa(colunas[w - limite_h:][::-1], std_max, tol_cor)
+    esq, med_esq = _contar_faixa(colunas[:limite_h], frac_min, tol_cor)
+    dir_, med_dir = _contar_faixa(colunas[w - limite_h:][::-1], frac_min, tol_cor)
     if esq >= limite_h and dir_ >= limite_h:
         return None
 
-    # Cor média de todas as faixas encontradas, pesada pelo tamanho de
-    # cada uma (uma faixa grossa representa melhor o fundo que uma fina).
-    partes, pesos = [], []
-    if topo > 0:
-        partes.append(f[:topo].reshape(-1, 3).mean(axis=0)); pesos.append(topo * w)
-    if base > 0:
-        partes.append(f[h - base:].reshape(-1, 3).mean(axis=0)); pesos.append(base * w)
-    if esq > 0:
-        partes.append(meio[:, :esq].reshape(-1, 3).mean(axis=0)); pesos.append(esq * meio.shape[0])
-    if dir_ > 0:
-        partes.append(meio[:, w - dir_:].reshape(-1, 3).mean(axis=0)); pesos.append(dir_ * meio.shape[0])
-
-    if partes:
-        cor = np.average(np.array(partes), axis=0, weights=np.array(pesos, dtype=np.float32))
-    else:
-        cor = None
+    # Cor "central" da moldura: mediana das medianas de cada linha/coluna
+    # aceita (não joga todos os pixels crus num saco só). Duas etapas de
+    # mediana em vez de uma: a primeira (dentro de _contar_faixa) já
+    # limpou o texto de CADA linha; juntar os pixels crus de novo aqui
+    # reintroduziria o halo de compressão ao redor do texto e puxaria a
+    # cor pra um tom errado (ex: branco virando "cinza").
+    partes = [m for m in (med_topo, med_base, med_esq, med_dir) if m is not None]
+    cor = np.median(np.concatenate(partes), axis=0) if partes else None
 
     return topo, base, esq, dir_, cor
 
