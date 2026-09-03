@@ -57,15 +57,61 @@ def salvar_json(caminho, dados):
         json.dump(dados, f, indent=2, ensure_ascii=False)
 
 
+LIBS_NECESSARIAS = ("cv2", "torch", "open_clip", "PIL")
+
+
 def encontrar_python():
-    """Localiza um interpretador Python de verdade no sistema. Não usar
-    sys.executable aqui: quando o launcher está compilado (frozen),
-    sys.executable aponta pro próprio launcher.exe, não pra um Python."""
-    for nome in ("python", "python3", "py"):
+    """Localiza um interpretador Python que realmente tenha as bibliotecas
+    do app instaladas. Não basta pegar "o primeiro python do PATH": em PCs
+    com mais de uma instalação (comum aqui — Python 3.11 e 3.14 lado a
+    lado), o primeiro do PATH pode ser justamente o que NÃO tem torch/
+    open_clip instalados, e o app abriria só pra fechar com erro.
+    Não usar sys.executable aqui: quando o launcher está compilado
+    (frozen), sys.executable aponta pro próprio launcher.exe, não pra um
+    Python."""
+    candidatos = []
+    for nome in ("python", "py", "python3"):
         caminho = shutil.which(nome)
-        if caminho:
-            return caminho
-    return None
+        if caminho and caminho not in candidatos:
+            candidatos.append(caminho)
+
+    # O Python Launcher (py.exe) sabe listar TODAS as versões instaladas,
+    # mesmo as que não são a primeira no PATH — usa isso pra não depender
+    # só da ordem do PATH.
+    py_launcher = shutil.which("py")
+    if py_launcher:
+        try:
+            saida = subprocess.run(
+                [py_launcher, "-0p"], capture_output=True, text=True, timeout=5
+            )
+            for linha in saida.stdout.splitlines():
+                for pedaco in linha.split():
+                    if pedaco.lower().endswith(("python.exe", "python")) and pedaco not in candidatos:
+                        candidatos.append(pedaco)
+        except Exception:
+            pass
+
+    if not candidatos:
+        return None
+
+    # Testa cada candidato de verdade: só serve o que consegue importar
+    # as bibliotecas pesadas que o app precisa.
+    codigo_teste = "import " + ", ".join(LIBS_NECESSARIAS)
+    for cand in candidatos:
+        try:
+            r = subprocess.run(
+                [cand, "-c", codigo_teste],
+                capture_output=True, timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if r.returncode == 0:
+                return cand
+        except Exception:
+            continue
+
+    # Nenhum tem as libs — devolve o primeiro mesmo assim, pra pelo menos
+    # cair na mensagem de erro clara do próprio FNK_Separador.py.
+    return candidatos[0]
 
 
 class Launcher(tk.Tk):
@@ -231,6 +277,19 @@ class Launcher(tk.Tk):
         if not self.entry_point:
             messagebox.showerror("Erro", "update_config.json sem 'entry_point' configurado.")
             return
+
+        # Se existir um .exe já compilado do app do lado do launcher (modo
+        # "onedir" do PyInstaller: pasta com o mesmo nome, ou onefile solto
+        # na mesma pasta), roda ele direto — não depende de Python nem das
+        # bibliotecas estarem instaladas nessa máquina.
+        nome_base = Path(self.entry_point).stem
+        for candidato in (self.pasta / f"{nome_base}.exe", self.pasta / nome_base / f"{nome_base}.exe"):
+            if candidato.is_file():
+                try:
+                    subprocess.Popen([str(candidato)], cwd=str(candidato.parent))
+                except Exception as e:
+                    messagebox.showerror("Erro ao iniciar", str(e))
+                return
 
         caminho_entry = self.pasta / self.entry_point
         if not caminho_entry.is_file():
