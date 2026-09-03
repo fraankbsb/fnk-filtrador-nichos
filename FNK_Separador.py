@@ -75,7 +75,7 @@ CONFIG_PADRAO = {
     # do projeto.
     "pasta_origem":        "",
     "pasta_perfis":        r"D:\fnkSocialMidia\fnkPerfis",
-    "pasta_revisao":       r"D:\fnkSocialMidia\fnkFiltradorNichos\Revisão de Videos",
+    "pasta_revisao":       r"D:\fnkSocialMidia\COMPLETOS\fnkFiltradorNichos\Revisão de Videos",
     "frames_por_video":    10,
     "amostra_calibracao":  30,
     "confianca_minima":    0.05,
