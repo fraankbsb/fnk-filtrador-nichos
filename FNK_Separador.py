@@ -67,6 +67,13 @@ except ImportError as e:
 # ══════════════════════════════════════════════
 
 CONFIG_PADRAO = {
+    # Onde ficam as pastas de vídeo A PROCESSAR (a lista que aparece na
+    # tela inicial do programa). Vazio = usa a própria pasta onde o .exe/
+    # script está rodando (comportamento antigo). Preencha isso quando o
+    # programa estiver instalado num lugar diferente (ex: Área de
+    # Trabalho) mas os vídeos continuarem numa pasta fixa, tipo a pasta
+    # do projeto.
+    "pasta_origem":        "",
     "pasta_perfis":        r"D:\fnkSocialMidia\fnkPerfis",
     "pasta_revisao":       r"D:\fnkSocialMidia\fnkFiltradorNichos\Revisão de Videos",
     "frames_por_video":    10,
@@ -83,6 +90,7 @@ CONFIG_PADRAO = {
 }
 
 # Preenchidos por aplicar_config() a partir do config.json na inicialização.
+PASTA_ORIGEM  = CONFIG_PADRAO["pasta_origem"]
 PASTA_PERFIS  = CONFIG_PADRAO["pasta_perfis"]
 PASTA_REVISAO = CONFIG_PADRAO["pasta_revisao"]
 FRAMES_POR_VIDEO      = CONFIG_PADRAO["frames_por_video"]
@@ -119,9 +127,10 @@ def carregar_config(pasta_base):
 
 
 def aplicar_config(cfg):
-    global PASTA_PERFIS, PASTA_REVISAO, FRAMES_POR_VIDEO, AMOSTRA_CALIBRACAO
+    global PASTA_ORIGEM, PASTA_PERFIS, PASTA_REVISAO, FRAMES_POR_VIDEO, AMOSTRA_CALIBRACAO
     global CONFIANCA_MINIMA, GAP_SECUNDARIA, FATOR_CALIBRACAO
     global USAR_DUAS_CATEGORIAS, RECORTE_TOPO
+    PASTA_ORIGEM         = cfg.get("pasta_origem", "")
     PASTA_PERFIS         = cfg["pasta_perfis"]
     PASTA_REVISAO        = cfg["pasta_revisao"]
     FRAMES_POR_VIDEO     = int(cfg["frames_por_video"])
@@ -1104,7 +1113,23 @@ def main():
     cfg = carregar_config(pasta_exe)
     aplicar_config(cfg)
 
+    # A pasta com os vídeos a processar pode ser diferente de onde o
+    # programa está instalado (ex: .exe na Área de Trabalho, vídeos numa
+    # pasta fixa do projeto) — ver "pasta_origem" no config.json.
+    pasta_origem_videos = PASTA_ORIGEM.strip() if PASTA_ORIGEM else ""
+    pasta_base = Path(pasta_origem_videos) if pasta_origem_videos else Path(pasta_exe)
+
     # Validações rápidas
+    if not pasta_base.is_dir():
+        root = tk.Tk(); root.withdraw()
+        messagebox.showwarning(
+            "FNK Separador",
+            f"A pasta de origem dos vídeos não foi encontrada:\n{pasta_base}\n\n"
+            "Verifique 'pasta_origem' em config.json."
+        )
+        root.destroy()
+        sys.exit(1)
+
     if not os.path.isdir(PASTA_PERFIS):
         root = tk.Tk(); root.withdraw()
         messagebox.showwarning(
@@ -1115,7 +1140,7 @@ def main():
         root.destroy()
         sys.exit(1)
 
-    app = App(pasta_exe)
+    app = App(pasta_base)
     app.mainloop()
 
 
