@@ -35,7 +35,7 @@ import os, sys, shutil, time, threading, random, json, csv
 from pathlib import Path
 from datetime import datetime
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 # As libs abaixo são pesadas e às vezes ausentes quando o .py é aberto com
 # um Python diferente do usado para instalar as dependências (ex: duplo
@@ -124,6 +124,14 @@ def carregar_config(pasta_base):
     cfg = dict(CONFIG_PADRAO)
     cfg.update({k: v for k, v in dados.items() if k in CONFIG_PADRAO})
     return cfg
+
+
+def salvar_config(pasta_base, cfg):
+    """Grava config.json ao lado do .exe/script — usado quando o usuário
+    muda alguma pasta pela tela (ex: pasta de destino) e isso precisa
+    ficar valendo da próxima vez que o programa abrir."""
+    with open(caminho_config(pasta_base), "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
 
 
 def aplicar_config(cfg):
@@ -485,11 +493,16 @@ COR_AZUL    = "#85B7EB"
 
 
 class App(tk.Tk):
-    def __init__(self, pasta_base):
+    def __init__(self, pasta_base, pasta_exe=None):
         super().__init__()
         self.pasta_base = pasta_base
+        # Pasta onde fica o config.json (pode ser diferente de pasta_base
+        # quando "pasta_origem" está configurado) — precisa pra gravar de
+        # volta quando o usuário muda a pasta de destino pela tela.
+        self.pasta_exe  = pasta_exe if pasta_exe is not None else pasta_base
         self._rodando   = False
         self._vars_pastas = {}   # {Path: tk.IntVar}
+        self._pastas_extra = []  # pastas escolhidas manualmente (fora da pasta_base)
 
         self.title("FNK Separador de Vídeos")
         self.geometry("660x640")
@@ -510,7 +523,13 @@ class App(tk.Tk):
 
     # ─── Tela 1: seleção de pastas ────────────
 
-    def _build_selector(self):
+    def _build_selector(self, forcar_marcada=None):
+        # Preserva o que já estava marcado (e força marcar uma pasta nova,
+        # se veio de "Escolher outra pasta...") antes de redesenhar a tela.
+        marcadas_antes = {p for p, v in self._vars_pastas.items() if v.get() == 1}
+        if forcar_marcada is not None:
+            marcadas_antes.add(forcar_marcada)
+
         self._limpar_janela()
 
         hdr = tk.Frame(self, bg="#0d0d0d", pady=16)
@@ -534,6 +553,9 @@ class App(tk.Tk):
                  font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(0, 10))
 
         pastas = listar_pastas_origem(self.pasta_base)
+        for extra in self._pastas_extra:
+            if extra not in pastas:
+                pastas.append(extra)
         self.pastas_disponiveis = pastas
 
         lista_wrap = tk.Frame(card, bg=COR_BORDA, padx=1, pady=1)
@@ -560,9 +582,13 @@ class App(tk.Tk):
         else:
             for pasta in pastas:
                 n_videos = len(listar_videos(pasta))
-                var = tk.IntVar(value=0)
+                var = tk.IntVar(value=1 if pasta in marcadas_antes else 0)
                 sufixo = "vídeo" if n_videos == 1 else "vídeos"
-                texto = f"  {pasta.name}   —   {n_videos} {sufixo}"
+                # Pasta escolhida manualmente (fora da pasta de origem
+                # padrão) mostra o caminho completo, pra não confundir com
+                # pastas de mesmo nome em outro lugar do PC.
+                nome_exibido = str(pasta) if pasta in self._pastas_extra else pasta.name
+                texto = f"  {nome_exibido}   —   {n_videos} {sufixo}"
                 cb = tk.Checkbutton(
                     lista_frame, text=texto, variable=var,
                     bg="#0d1117", fg=COR_BRANCO, selectcolor=COR_BORDA,
@@ -579,10 +605,16 @@ class App(tk.Tk):
         rod.pack(fill="x", side="bottom")
 
         tk.Button(
-            rod, text="Selecionar todas", command=self._selecionar_todas,
+            rod, text="📁  Escolher outra pasta...", command=self._escolher_pasta_extra,
             font=("Segoe UI", 9), bg="#2c2c2a", fg=COR_BRANCO, relief="flat",
             padx=12, pady=6, cursor="hand2",
         ).pack(side="left")
+
+        tk.Button(
+            rod, text="Selecionar todas", command=self._selecionar_todas,
+            font=("Segoe UI", 9), bg="#2c2c2a", fg=COR_BRANCO, relief="flat",
+            padx=12, pady=6, cursor="hand2",
+        ).pack(side="left", padx=(8, 0))
 
         tk.Button(
             rod, text="Limpar", command=self._limpar_selecao,
@@ -600,6 +632,33 @@ class App(tk.Tk):
             state=("normal" if pastas else "disabled"),
         )
         self._btn_processar.pack(side="right")
+
+    def _escolher_pasta_extra(self):
+        """Abre o seletor de pastas do Windows pra deixar escolher QUALQUER
+        pasta do computador como origem, não só as que já aparecem na
+        lista automática."""
+        escolhida = filedialog.askdirectory(
+            title="Escolher pasta de vídeos (em qualquer lugar do computador)",
+            mustexist=True,
+        )
+        if not escolhida:
+            return
+
+        caminho = Path(escolhida).resolve()
+        n_videos = len(listar_videos(caminho))
+        if n_videos == 0:
+            messagebox.showwarning(
+                "FNK Separador",
+                f"Não encontrei nenhum vídeo direto dentro de:\n{caminho}\n\n"
+                "(vídeos dentro de subpastas dela não contam — tem que estar "
+                "direto dentro da pasta escolhida)"
+            )
+            return
+
+        if caminho not in self._pastas_extra and caminho not in listar_pastas_origem(self.pasta_base):
+            self._pastas_extra.append(caminho)
+
+        self._build_selector(forcar_marcada=caminho)
 
     def _selecionar_todas(self):
         for pasta, var in self._vars_pastas.items():
@@ -643,17 +702,32 @@ class App(tk.Tk):
                  font=("Segoe UI", 12, "bold"), anchor="w").pack(fill="x")
         tk.Label(card, text="Escolha uma das três opções abaixo:",
                  bg=COR_CARD, fg=COR_CINZA,
-                 font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(0, 14))
+                 font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(0, 10))
+
+        dest_frame = tk.Frame(card, bg="#252525", padx=14, pady=10,
+                               highlightthickness=1, highlightbackground=COR_BORDA)
+        dest_frame.pack(fill="x", pady=(0, 14))
+        self._lbl_destino = tk.Label(
+            dest_frame, text=f"💾  Salvar em: {os.path.join(PASTA_PERFIS, NOME_PASTA_PROCESSADOS)}",
+            bg="#252525", fg=COR_BRANCO, font=("Segoe UI", 9),
+            anchor="w", justify="left", wraplength=440,
+        )
+        self._lbl_destino.pack(side="left", fill="x", expand=True)
+        tk.Button(
+            dest_frame, text="Alterar...", command=self._alterar_destino,
+            font=("Segoe UI", 9), bg="#2c2c2a", fg=COR_BRANCO, relief="flat",
+            padx=10, pady=4, cursor="hand2",
+        ).pack(side="right")
 
         opcoes = [
             (MODO_NICHO, "🎯  Somente NICHO",
              "Analisa o que aparece no vídeo (Pets / Comedia) usando IA.\n"
-             "Vai para: fnkPerfis\\Pets  e  fnkPerfis\\Comedia\n"
+             "Vai para: VIDEOS PROCESSADOS\\Nichos\\Pets  e  \\Comedia\n"
              "Mais demorado — precisa carregar o modelo de IA."),
             (MODO_TEMPLATE, "🎨  Somente TEMPLATE",
              "Analisa a moldura/fundo do vídeo (preto, branco, cinza, colorido)\n"
              "e separa os que são 9:16 preenchendo a tela toda.\n"
-             "Vai para: fnkPerfis\\Templates\\...  —  bem mais rápido, sem IA."),
+             "Vai para: VIDEOS PROCESSADOS\\Template\\...  —  bem mais rápido, sem IA."),
             (MODO_AMBOS, "⚡  NICHO + TEMPLATE",
              "Faz as duas separações de uma vez. Cada vídeo ganha uma cópia\n"
              "na pasta do nicho E outra na pasta da cor do template.\n"
@@ -696,6 +770,35 @@ class App(tk.Tk):
             font=("Segoe UI", 9), bg="#2c2c2a", fg=COR_BRANCO, relief="flat",
             padx=12, pady=6, cursor="hand2",
         ).pack(side="left")
+
+    def _alterar_destino(self):
+        """Deixa escolher QUALQUER pasta do PC como destino dos vídeos
+        processados. A escolha fica salva no config.json, valendo pras
+        próximas vezes também — até trocar de novo."""
+        global PASTA_PERFIS
+        escolhida = filedialog.askdirectory(
+            title="Escolher pasta onde salvar os vídeos processados",
+            initialdir=PASTA_PERFIS if os.path.isdir(PASTA_PERFIS) else None,
+            mustexist=True,
+        )
+        if not escolhida:
+            return
+
+        PASTA_PERFIS = str(Path(escolhida).resolve())
+        self._lbl_destino.configure(
+            text=f"💾  Salvar em: {os.path.join(PASTA_PERFIS, NOME_PASTA_PROCESSADOS)}"
+        )
+
+        try:
+            cfg = carregar_config(self.pasta_exe)
+            cfg["pasta_perfis"] = PASTA_PERFIS
+            salvar_config(self.pasta_exe, cfg)
+        except Exception as e:
+            messagebox.showwarning(
+                "FNK Separador",
+                f"A pasta de destino foi trocada só pra esta execução — "
+                f"não consegui salvar pra próxima vez:\n{e}"
+            )
 
     def _iniciar(self, pastas, modo):
         self._build_execucao(pastas, modo)
@@ -1140,7 +1243,7 @@ def main():
         root.destroy()
         sys.exit(1)
 
-    app = App(pasta_base)
+    app = App(pasta_base, pasta_exe)
     app.mainloop()
 
 
