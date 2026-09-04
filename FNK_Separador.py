@@ -748,6 +748,26 @@ class App(tk.Tk):
             padx=10, pady=4, cursor="hand2",
         ).pack(side="right")
 
+        # As opções ficam dentro de uma área com rolagem (igual a lista de
+        # pastas da tela 1) — sem isso, com 3+ tipos de separação o
+        # conteúdo passa da altura da janela e empurra os botões de
+        # baixo (Voltar/Continuar) pra fora da área visível.
+        lista_wrap = tk.Frame(card, bg=COR_BORDA, padx=1, pady=1)
+        lista_wrap.pack(fill="both", expand=True)
+
+        canvas_modo = tk.Canvas(lista_wrap, bg=COR_CARD, highlightthickness=0)
+        scroll_modo = tk.Scrollbar(lista_wrap, orient="vertical", command=canvas_modo.yview,
+                                    bg=COR_CARD, troughcolor=COR_BG)
+        opcoes_frame = tk.Frame(canvas_modo, bg=COR_CARD)
+        opcoes_frame.bind(
+            "<Configure>",
+            lambda e: canvas_modo.configure(scrollregion=canvas_modo.bbox("all"))
+        )
+        canvas_modo.create_window((0, 0), window=opcoes_frame, anchor="nw", width=580)
+        canvas_modo.configure(yscrollcommand=scroll_modo.set)
+        canvas_modo.pack(side="left", fill="both", expand=True)
+        scroll_modo.pack(side="right", fill="y")
+
         opcoes = [
             (TIPO_NICHO, "🎯  NICHO",
              "Analisa o que aparece no vídeo (Pets / Comedia) usando IA.\n"
@@ -769,7 +789,7 @@ class App(tk.Tk):
             var = tk.IntVar(value=0)
             self._vars_modo[tipo] = var
 
-            bloco = tk.Frame(card, bg="#252525", padx=16, pady=12,
+            bloco = tk.Frame(opcoes_frame, bg="#252525", padx=16, pady=12,
                              highlightthickness=1, highlightbackground=COR_BORDA,
                              cursor="hand2")
             bloco.pack(fill="x", pady=5)
