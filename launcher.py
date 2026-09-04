@@ -57,7 +57,7 @@ def salvar_json(caminho, dados):
         json.dump(dados, f, indent=2, ensure_ascii=False)
 
 
-LIBS_NECESSARIAS = ("cv2", "torch", "open_clip", "PIL")
+LIBS_NECESSARIAS = ("cv2", "torch", "open_clip", "PIL", "av")
 
 
 def encontrar_python():

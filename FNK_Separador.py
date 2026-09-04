@@ -48,6 +48,7 @@ try:
     import open_clip
     from PIL import Image
     import FNK_Template as tpl
+    import FNK_Musica as msc
 except ImportError as e:
     _root = tk.Tk()
     _root.withdraw()
@@ -87,6 +88,10 @@ CONFIG_PADRAO = {
     # mesmo config.json, com prefixo "template_", e quem lê/valida é o
     # próprio módulo FNK_Template.
     **tpl.CONFIG_TEMPLATE_PADRAO,
+    # Ajustes da separação por MÚSICA (tem música de fundo ou não). Ficam
+    # no mesmo config.json, com prefixo "musica_", e quem lê/valida é o
+    # próprio módulo FNK_Musica.
+    **msc.CONFIG_MUSICA_PADRAO,
 }
 
 # Preenchidos por aplicar_config() a partir do config.json na inicialização.
@@ -149,6 +154,7 @@ def aplicar_config(cfg):
     USAR_DUAS_CATEGORIAS = bool(cfg["usar_duas_categorias"])
     RECORTE_TOPO         = float(cfg["recorte_topo"])
     tpl.aplicar_config(cfg)
+    msc.aplicar_config(cfg)
 
 
 # ══════════════════════════════════════════════
@@ -429,25 +435,43 @@ def listar_pastas_origem(pasta_base):
 # ══════════════════════════════════════════════
 # NICHO    → analisa o CONTEÚDO com IA (Pets / Comedia). Lento.
 # TEMPLATE → analisa a MOLDURA do vídeo (cor do fundo, 9:16). Rápido.
-# AMBOS    → faz as duas coisas; o vídeo ganha uma cópia em cada pasta.
+# MÚSICA   → analisa o ÁUDIO pra saber se tem música tocando. Rápido.
+#
+# "modo" é um conjunto (set) com os tipos marcados — dá pra combinar
+# quantos quiser, ex: {TIPO_NICHO, TIPO_MUSICA}. Um vídeo processado com
+# vários tipos ganha uma cópia em cada pasta de destino correspondente.
 
-MODO_NICHO    = "nicho"
-MODO_TEMPLATE = "template"
-MODO_AMBOS    = "ambos"
+TIPO_NICHO    = "nicho"
+TIPO_TEMPLATE = "template"
+TIPO_MUSICA   = "musica"
 
-ROTULO_MODO = {
-    MODO_NICHO:    "Somente NICHO",
-    MODO_TEMPLATE: "Somente TEMPLATE",
-    MODO_AMBOS:    "NICHO + TEMPLATE",
+NOME_TIPO = {
+    TIPO_NICHO:    "NICHO",
+    TIPO_TEMPLATE: "TEMPLATE",
+    TIPO_MUSICA:   "MÚSICA",
 }
+ORDEM_TIPOS = (TIPO_NICHO, TIPO_TEMPLATE, TIPO_MUSICA)
+
+
+def rotulo_modo(modo):
+    ativos = [NOME_TIPO[t] for t in ORDEM_TIPOS if t in modo]
+    if not ativos:
+        return "Nenhum"
+    if len(ativos) == 1:
+        return f"Somente {ativos[0]}"
+    return " + ".join(ativos)
 
 
 def usa_nicho(modo):
-    return modo in (MODO_NICHO, MODO_AMBOS)
+    return TIPO_NICHO in modo
 
 
 def usa_template(modo):
-    return modo in (MODO_TEMPLATE, MODO_AMBOS)
+    return TIPO_TEMPLATE in modo
+
+
+def usa_musica(modo):
+    return TIPO_MUSICA in modo
 
 
 # Tudo que este programa separa cai dentro dessa pasta, pra não se
@@ -465,6 +489,11 @@ def pasta_destino_nicho(nicho):
 def pasta_destino_template(nome):
     """<fnkPerfis>\\VIDEOS PROCESSADOS\\Template\\<Preto|Branco|Cinza|Colorido|...>"""
     return os.path.join(PASTA_PERFIS, NOME_PASTA_PROCESSADOS, tpl.NOME_PASTA_TEMPLATES, nome)
+
+
+def pasta_destino_musica(nome):
+    """<fnkPerfis>\\VIDEOS PROCESSADOS\\Musica\\<ComMusica|SemMusica>"""
+    return os.path.join(PASTA_PERFIS, NOME_PASTA_PROCESSADOS, msc.NOME_PASTA_MUSICA, nome)
 
 
 def destino_unico(arquivo, pasta_destino):
@@ -700,7 +729,7 @@ class App(tk.Tk):
         tk.Label(card, text="Como você quer separar esses vídeos?",
                  bg=COR_CARD, fg=COR_BRANCO,
                  font=("Segoe UI", 12, "bold"), anchor="w").pack(fill="x")
-        tk.Label(card, text="Escolha uma das três opções abaixo:",
+        tk.Label(card, text="Marque um ou mais tipos — dá pra combinar quantos quiser:",
                  bg=COR_CARD, fg=COR_CINZA,
                  font=("Segoe UI", 9), anchor="w").pack(fill="x", pady=(0, 10))
 
@@ -720,46 +749,57 @@ class App(tk.Tk):
         ).pack(side="right")
 
         opcoes = [
-            (MODO_NICHO, "🎯  Somente NICHO",
+            (TIPO_NICHO, "🎯  NICHO",
              "Analisa o que aparece no vídeo (Pets / Comedia) usando IA.\n"
              "Vai para: VIDEOS PROCESSADOS\\Nichos\\Pets  e  \\Comedia\n"
              "Mais demorado — precisa carregar o modelo de IA."),
-            (MODO_TEMPLATE, "🎨  Somente TEMPLATE",
+            (TIPO_TEMPLATE, "🎨  TEMPLATE",
              "Analisa a moldura/fundo do vídeo (preto, branco, cinza, colorido)\n"
              "e separa os que são 9:16 preenchendo a tela toda.\n"
-             "Vai para: VIDEOS PROCESSADOS\\Template\\...  —  bem mais rápido, sem IA."),
-            (MODO_AMBOS, "⚡  NICHO + TEMPLATE",
-             "Faz as duas separações de uma vez. Cada vídeo ganha uma cópia\n"
-             "na pasta do nicho E outra na pasta da cor do template.\n"
-             "É o mais demorado: soma o tempo das duas análises."),
+             "Vai para: VIDEOS PROCESSADOS\\Template\\...  —  rápido, sem IA."),
+            (TIPO_MUSICA, "🎵  MÚSICA",
+             "Analisa o áudio com IA pra saber se o vídeo tem música tocando\n"
+             "(mesmo com fala em cima). Vai para:\n"
+             "VIDEOS PROCESSADOS\\Musica\\ComMusica ou \\SemMusica\n"
+             "1ª vez baixa um modelo (~300MB) — depois disso é rápido."),
         ]
 
-        for modo, titulo, desc in opcoes:
+        self._vars_modo = {}
+        for tipo, titulo, desc in opcoes:
+            var = tk.IntVar(value=0)
+            self._vars_modo[tipo] = var
+
             bloco = tk.Frame(card, bg="#252525", padx=16, pady=12,
                              highlightthickness=1, highlightbackground=COR_BORDA,
                              cursor="hand2")
             bloco.pack(fill="x", pady=5)
 
-            lbl_t = tk.Label(bloco, text=titulo, bg="#252525", fg=COR_VERDE_T,
-                             font=("Segoe UI", 12, "bold"), anchor="w")
-            lbl_t.pack(fill="x")
+            cb = tk.Checkbutton(
+                bloco, text=titulo, variable=var,
+                bg="#252525", fg=COR_VERDE_T, selectcolor=COR_BORDA,
+                activebackground="#252525", activeforeground=COR_VERDE_T,
+                font=("Segoe UI", 12, "bold"), anchor="w",
+            )
+            cb.pack(fill="x")
             lbl_d = tk.Label(bloco, text=desc, bg="#252525", fg=COR_CINZA,
                              font=("Segoe UI", 9), anchor="w", justify="left")
             lbl_d.pack(fill="x")
 
-            def escolher(_evento=None, m=modo):
-                self._iniciar(pastas, m)
+            def alternar(_evento=None, v=var):
+                v.set(0 if v.get() else 1)
 
-            # O clique vale no bloco inteiro, não só no texto do título.
-            for w in (bloco, lbl_t, lbl_d):
-                w.bind("<Button-1>", escolher)
+            # O clique no texto da descrição também marca/desmarca — só o
+            # bloco e a descrição, pra não brigar com o clique nativo do
+            # checkbox (que já alterna sozinho).
+            for w in (bloco, lbl_d):
+                w.bind("<Button-1>", alternar)
 
-            def realce(cor, alvo=bloco, textos=(lbl_t, lbl_d)):
+            def realce(cor, alvo=bloco, textos=(lbl_d,)):
                 alvo.configure(bg=cor)
                 for w in textos:
                     w.configure(bg=cor)
 
-            for w in (bloco, lbl_t, lbl_d):
+            for w in (bloco, cb, lbl_d):
                 w.bind("<Enter>", lambda e, f=realce: f("#2f3b36"))
                 w.bind("<Leave>", lambda e, f=realce: f("#252525"))
 
@@ -770,6 +810,21 @@ class App(tk.Tk):
             font=("Segoe UI", 9), bg="#2c2c2a", fg=COR_BRANCO, relief="flat",
             padx=12, pady=6, cursor="hand2",
         ).pack(side="left")
+
+        tk.Button(
+            rod, text="▶  Continuar", command=lambda: self._confirmar_modo(pastas),
+            font=("Segoe UI", 11, "bold"),
+            bg=COR_VERDE, fg="white", relief="flat",
+            padx=20, pady=10, cursor="hand2",
+            activebackground="#0f6e56", activeforeground="white",
+        ).pack(side="right")
+
+    def _confirmar_modo(self, pastas):
+        modo = {tipo for tipo, var in self._vars_modo.items() if var.get() == 1}
+        if not modo:
+            messagebox.showinfo("FNK Separador", "Marque pelo menos um tipo de separação.")
+            return
+        self._iniciar(pastas, modo)
 
     def _alterar_destino(self):
         """Deixa escolher QUALQUER pasta do PC como destino dos vídeos
@@ -819,7 +874,7 @@ class App(tk.Tk):
         tk.Label(hdr, text=f"Processando: {nomes}",
                  bg="#0d0d0d", fg=COR_CINZA,
                  font=("Segoe UI", 9), wraplength=620).pack()
-        tk.Label(hdr, text=f"Modo: {ROTULO_MODO[modo]}",
+        tk.Label(hdr, text=f"Modo: {rotulo_modo(modo)}",
                  bg="#0d0d0d", fg=COR_AMARELO,
                  font=("Segoe UI", 9, "bold")).pack()
 
@@ -894,13 +949,15 @@ class App(tk.Tk):
             esperadas += [pasta_destino_nicho(c) for c in NICHO_PROMPTS]
         if usa_template(modo):
             esperadas += [pasta_destino_template(c) for c in tpl.TODOS_TEMPLATES]
+        if usa_musica(modo):
+            esperadas += [pasta_destino_musica(c) for c in msc.TODAS_MUSICA]
         ausentes = [p for p in esperadas if not os.path.isdir(p)]
         if ausentes:
             self._log_add(
                 f"⚠  {len(ausentes)} pasta(s) de destino não encontrada(s) — "
                 "serão criadas automaticamente.", "rev"
             )
-        self._log_add(f"  Modo: {ROTULO_MODO[modo]}", "info")
+        self._log_add(f"  Modo: {rotulo_modo(modo)}", "info")
         self._log_add(
             f"  Destino: {os.path.join(PASTA_PERFIS, NOME_PASTA_PROCESSADOS)}",
             "info"
@@ -920,6 +977,14 @@ class App(tk.Tk):
                 f"{tpl.valor_config('template_frames')} frames/vídeo | "
                 f"9:16 com folga de "
                 f"{tpl.valor_config('template_tolerancia_916')*100:.0f}%",
+                "info"
+            )
+        if usa_musica(modo):
+            self._log_add(
+                f"  Música: pastas em {NOME_PASTA_PROCESSADOS}\\{msc.NOME_PASTA_MUSICA}\\ | "
+                f"IA (AudioSet/Cnn14) | "
+                f"{msc.valor_config('musica_duracao_analise'):.0f}s de áudio analisados | "
+                f"confiança mín. {msc.valor_config('musica_limiar_confianca')}",
                 "info"
             )
         self._log_add("", "info")
@@ -966,12 +1031,12 @@ class App(tk.Tk):
         log_linhas = []
         csv_linhas = []
 
-        # O modelo de IA só é necessário para a separação por nicho. No
-        # modo Somente TEMPLATE ele nem é carregado — é o que faz esse
-        # modo começar na hora, em vez de esperar o CLIP subir.
+        # Os modelos de IA só são necessários para NICHO (imagem) e
+        # MÚSICA (áudio). O modo TEMPLATE não usa IA nenhuma — é o que
+        # faz ele começar na hora, sem esperar nenhum modelo carregar.
         if usa_nicho(modo):
-            self._atualizar_status("Carregando modelo de IA (pode demorar na 1ª vez)...", COR_AMARELO)
-            self._log_add("  Carregando modelo de análise de vídeo...", "info")
+            self._atualizar_status("Carregando modelo de IA (imagem, pode demorar na 1ª vez)...", COR_AMARELO)
+            self._log_add("  Carregando modelo de análise de vídeo (nicho)...", "info")
             try:
                 carregar_modelo()
             except Exception as e:
@@ -979,9 +1044,26 @@ class App(tk.Tk):
                 self._atualizar_status("Erro ao preparar modelo de IA.", COR_ERRO)
                 self._finalizar()
                 return
-        else:
-            self._log_add("  Modo template: análise direta dos pixels, "
-                          "sem modelo de IA (bem mais rápido).", "info")
+
+        if usa_musica(modo):
+            if not msc.modelo_ja_baixado():
+                self._log_add(
+                    "  Modelo de IA de áudio ainda não está no PC — baixando "
+                    "(~300MB, só acontece uma vez).", "info"
+                )
+            try:
+                msc.carregar_modelo(
+                    callback_status=lambda m: self._atualizar_status(m, COR_AMARELO)
+                )
+            except Exception as e:
+                self._log_add(f"  ✗ Falha ao carregar o modelo de IA de áudio: {e}", "err")
+                self._atualizar_status("Erro ao preparar modelo de IA de áudio.", COR_ERRO)
+                self._finalizar()
+                return
+
+        if not usa_nicho(modo) and not usa_musica(modo):
+            self._log_add("  Sem NICHO nem MÚSICA selecionados: análise direta "
+                          "dos pixels, sem modelo de IA (bem mais rápido).", "info")
 
         self._log_add("─" * 54, "head")
         self._log_add(f"  Início: {datetime.now():%d/%m/%Y %H:%M:%S}", "head")
@@ -1023,6 +1105,7 @@ class App(tk.Tk):
                 # não sobrar nenhum destino.
                 cat_score = []
                 info_tpl = None
+                info_musica = None
                 falhas = []
 
                 if usa_nicho(modo):
@@ -1037,6 +1120,12 @@ class App(tk.Tk):
                     except Exception as e:
                         falhas.append(f"template: {e}")
 
+                if usa_musica(modo):
+                    try:
+                        info_musica = msc.analisar_musica(str(video))
+                    except Exception as e:
+                        falhas.append(f"música: {e}")
+
                 # ─── Monta a lista de destinos ───
                 alvos = []   # [(rótulo_p/_log, pasta_de_destino)]
                 for cat, _score in cat_score:
@@ -1044,11 +1133,16 @@ class App(tk.Tk):
                 if info_tpl is not None:
                     alvos.append((info_tpl["pasta"],
                                   pasta_destino_template(info_tpl["pasta"])))
+                if info_musica is not None:
+                    alvos.append((info_musica["pasta"],
+                                  pasta_destino_musica(info_musica["pasta"])))
 
                 cat1, score1 = (cat_score[0] if len(cat_score) > 0 else ("", ""))
                 cat2, score2 = (cat_score[1] if len(cat_score) > 1 else ("", ""))
                 nome_tpl = info_tpl["pasta"] if info_tpl else ""
                 resumo_tpl = info_tpl["resumo"] if info_tpl else ""
+                nome_musica = info_musica["pasta"] if info_musica else ""
+                resumo_musica = info_musica["resumo"] if info_musica else ""
 
                 if falhas and alvos:
                     self._log_add(f"  ⚠ Análise parcial de {video.name[:30]} — "
@@ -1077,10 +1171,10 @@ class App(tk.Tk):
                         for rotulo, dest in destinos:
                             log_linhas.append(f"OK|{pasta.name}|{rotulo}|{video.name}|{dest}")
                         csv_linhas.append([
-                            pasta.name, video.name, modo,
+                            pasta.name, video.name, rotulo_modo(modo),
                             cat1, f"{score1:.4f}" if score1 != "" else "",
                             cat2, f"{score2:.4f}" if score2 != "" else "",
-                            nome_tpl, resumo_tpl,
+                            nome_tpl, resumo_tpl, nome_musica, resumo_musica,
                             " | ".join(str(d) for _, d in destinos),
                             "OK", "; ".join(falhas), agora,
                         ])
@@ -1094,8 +1188,8 @@ class App(tk.Tk):
                         self._log_add(f"  ⚠ [REVISÃO               ] {video.name[:42]}", "rev")
                         log_linhas.append(f"REVISAO|{pasta.name}||{video.name}|{dest}")
                         csv_linhas.append([
-                            pasta.name, video.name, modo, "", "", "", "",
-                            "", "", str(dest), "REVISAO", motivo, agora,
+                            pasta.name, video.name, rotulo_modo(modo), "", "", "", "",
+                            "", "", "", "", str(dest), "REVISAO", motivo, agora,
                         ])
 
                 except Exception as e:
@@ -1103,8 +1197,9 @@ class App(tk.Tk):
                     self._log_add(f"  ✗ ERRO: {video.name[:40]} — {e}", "err")
                     log_linhas.append(f"ERRO|{pasta.name}||{video.name}|{e}")
                     csv_linhas.append([
-                        pasta.name, video.name, modo, cat1, "", cat2, "",
-                        nome_tpl, resumo_tpl, "", "ERRO", str(e), agora,
+                        pasta.name, video.name, rotulo_modo(modo), cat1, "", cat2, "",
+                        nome_tpl, resumo_tpl, nome_musica, resumo_musica,
+                        "", "ERRO", str(e), agora,
                     ])
 
                 self.after(0, lambda m=movidos: self._movidos_l.configure(text=str(m)))
@@ -1162,7 +1257,7 @@ class App(tk.Tk):
                 w.writerow([
                     "pasta", "arquivo", "modo",
                     "categoria_1", "score_1", "categoria_2", "score_2",
-                    "template", "detalhe_template",
+                    "template", "detalhe_template", "musica", "detalhe_musica",
                     "destinos", "status", "motivo", "data_hora",
                 ])
                 w.writerows(csv_linhas)

@@ -1,17 +1,31 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Empacota FNK_Separador.py com suas dependências pesadas (torch, open_clip,
-# cv2, PIL). torch e open_clip precisam de collect_all porque carregam
-# arquivos de dados/binários em tempo de execução (pesos, vocabulário BPE)
-# que o PyInstaller não detecta sozinho a partir dos imports.
+# cv2, PIL, av, panns_inference/torchlibrosa/matplotlib — modelo de áudio).
+# Todas precisam de collect_all porque carregam arquivos de dados/binários
+# em tempo de execução (pesos, vocabulário BPE, DLLs do ffmpeg embutido no
+# av, fontes/backends do matplotlib) que o PyInstaller não detecta sozinho
+# a partir dos imports. O PESO do modelo de áudio (~300MB) NÃO entra aqui —
+# ele é baixado sozinho na 1ª vez que a separação por música é usada (ver
+# FNK_Musica.py), do mesmo jeito que o CLIP baixa os pesos dele.
 
 from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = ["cv2", "PIL", "PIL.Image", "numpy", "FNK_Template"]
+hiddenimports = ["cv2", "PIL", "PIL.Image", "numpy", "FNK_Template", "FNK_Musica"]
 
-for pacote in ("torch", "open_clip"):
+for pacote in ("torch", "open_clip", "av", "panns_inference", "torchlibrosa", "matplotlib"):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(pacote)
+    # O matplotlib só entra aqui porque o panns_inference importa ele à
+    # toa (uma função de gráfico que a gente nunca chama, ver
+    # FNK_Musica.py). O programa força o backend "Agg" (sem janela) —
+    # nunca precisa do PyQt5 que o matplotlib detecta como backend
+    # opcional no PC de quem compila. Sem esse filtro, o PyQt5 inteiro
+    # (~200MB) ia junto à toa.
+    if pacote == "matplotlib":
+        pkg_datas = [t for t in pkg_datas if "PyQt5" not in t[0]]
+        pkg_binaries = [t for t in pkg_binaries if "PyQt5" not in t[0]]
+        pkg_hidden = [h for h in pkg_hidden if "PyQt5" not in h]
     datas += pkg_datas
     binaries += pkg_binaries
     hiddenimports += pkg_hidden
@@ -25,7 +39,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["PyQt5", "PyQt6", "PySide2", "PySide6"],
     noarchive=False,
     optimize=0,
 )
